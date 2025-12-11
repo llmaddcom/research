@@ -129,6 +129,39 @@ class MultiGPUModel:
         )
         
         return pipeline
+
+    def load_QwenImageEdit_and_zImagePipeline(self, 
+        QwenImageEdit_model_path,     
+        zImage_model_path,     
+        device_map={
+            "transformer":{0: "35GB", 1: "35GB", 2: "35GB"},
+            "vae_and_text_encoder":"cuda:2",
+        }
+        ):
+        tokenizer = self.load_tokenizer(QwenImageEdit_model_path + "/tokenizer")
+        processor = self.load_processor(QwenImageEdit_model_path + "/processor")
+        text_encoder = self.load_text_encoder(QwenImageEdit_model_path + "/text_encoder", device_map["vae_and_text_encoder"])
+        vae = self.load_vae(QwenImageEdit_model_path + "/vae", device_map["vae_and_text_encoder"])
+        scheduler = self.load_scheduler(QwenImageEdit_model_path + "/scheduler")
+        transformer = self.load_transformer(QwenImageEdit_model_path + "/transformer", device_map["transformer"])
+
+        pipeline = QwenImageEditPlusPipeline(
+            vae=vae,
+            text_encoder=text_encoder,
+            tokenizer=tokenizer,
+            processor=processor,
+            transformer=transformer,
+            scheduler=scheduler
+        )
+        z_image_pipeline = ZImagePipeline.from_pretrained(
+            zImage_model_path,
+            torch_dtype=self.dtype,
+            local_files_only=self.local_files_only,
+            trust_remote_code=self.trust_remote_code,
+            low_cpu_mem_usage=False,
+        ).to("cuda:1")
+        
+        return pipeline, z_image_pipeline
     
     def laod_QwenImagePipeline(self, 
     model_path,
@@ -228,17 +261,17 @@ def image_create_prompt(prompt):
     inputs = {
         "prompt": prompt,
         "negative_prompt": " ",
-        "generator": torch.manual_seed(0),
-        "num_inference_steps": 50,
-        "true_cfg_scale": 4.0,
+        "generator": torch.Generator("cuda").manual_seed(42),
+        "num_inference_steps": 9,
     }
     return inputs
 
 if __name__ == "__main__":
     model_path = "/data/zh/model/Qwen/Qwen-Image-Edit"
-    img_model_path = "/data/zh/model/Qwen-Image"
+    z_image_model_path = "/data/disk1/model/qwen/Z-Image-Turbo"
+
     multi_gpu_model = MultiGPUModel()
-    image_pipeline, edit_pipeline = multi_gpu_model.load_Image_and_Edit_Pipeline(img_model_path, model_path)
+    edit_pipeline, z_image_pipeline = multi_gpu_model.load_QwenImageEdit_and_zImagePipeline(model_path, z_image_model_path)
     
     inputs = edit_create_prompt("/data/zh/image.jpg", "背景改为蓝天白云")
     image_inputs = image_create_prompt("一个穿着红色衣服的女孩")
@@ -248,7 +281,7 @@ if __name__ == "__main__":
         output_image.save("test001.png")
         print("image saved at", os.path.abspath("test001.png"))
 
-        output_image = image_pipeline(**image_inputs)
+        output_image = z_image_pipeline(**image_inputs)
         output_image = output_image.images[0]
         output_image.save("test002.png")
         print("image saved at", os.path.abspath("test002.png"))
